@@ -4,7 +4,7 @@ import java.util
 
 import io.searchbox.client.config.HttpClientConfig
 import io.searchbox.client.{JestClient, JestClientFactory}
-import io.searchbox.core.{Index, Search, SearchResult}
+import io.searchbox.core.{Bulk, BulkResult, Index, Search, SearchResult}
 import org.elasticsearch.index.query.MatchQueryBuilder
 import org.elasticsearch.search.builder.SearchSourceBuilder
 import org.elasticsearch.search.sort.SortOrder
@@ -29,6 +29,27 @@ object MyEsUtil {
       .maxTotalConnection(20)
       .connTimeout(10000).readTimeout(10000).build())
   }
+
+
+  // batch
+  def saveBulk(dataList:List[(String,AnyRef)],indexName:String ): Unit ={
+    if(dataList!=null&&dataList.size>0){
+      val jest: JestClient = getClient
+      val bulkBuilder = new Bulk.Builder()
+      bulkBuilder.defaultIndex(indexName).defaultType("_doc")
+      for ((id,data) <- dataList ) {
+        val index: Index = new Index.Builder(data).id(id).build()
+        bulkBuilder.addAction(index)
+      }
+      val bulk: Bulk = bulkBuilder.build()
+      val items: util.List[BulkResult#BulkResultItem] = jest.execute(bulk).getItems
+      println("已保存："+items.size()+"条数据！")
+      jest.close()
+    }
+  }
+
+
+
 
   def main(args: Array[String]): Unit = {
         val jest: JestClient = getClient
