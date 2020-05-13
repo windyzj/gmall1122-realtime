@@ -7,11 +7,12 @@ import java.util.Date
 import com.alibaba.fastjson.{JSON, JSONObject}
 import com.atguigu.gmall1122.realtime.bean.DauInfo
 import com.atguigu.gmall1122.realtime.util.{MyEsUtil, MyKafkaUtil, OffsetManager, RedisUtil}
+import org.apache.hadoop.mapred.Task
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
-import org.apache.spark.SparkConf
+import org.apache.spark.{SparkConf, TaskContext}
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
-import org.apache.spark.streaming.kafka010.CanCommitOffsets
+import org.apache.spark.streaming.kafka010.{CanCommitOffsets, HasOffsetRanges, OffsetRange}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
 import redis.clients.jedis.Jedis
 
@@ -19,20 +20,36 @@ import scala.collection.mutable.ListBuffer
 
 object DauApp {
 
+  // 两个问题 1 数组下标i 和 分区数 不对应   保存的时候应该使用 offsetRange.partition 来存分区编号
+  // 2   redis的Key的日期（ 发送日志的业务） 和 es存储的索引后缀日期（当前系统日期） 没有对应 取同一天
   def main(args: Array[String]): Unit = {
       val sparkConf: SparkConf = new SparkConf().setAppName("dau_app").setMaster("local[*]")
       val ssc = new StreamingContext(sparkConf,Seconds(5))
       val topic="GMALL_START"
       val groupId="GMALL_DAU_CONSUMER"
+     //从redis中读取当前最新偏移量
+    val startOffset: Map[TopicPartition, Long] = OffsetManager.getOffset(groupId,topic)
 
-      val startOffset: Map[TopicPartition, Long] = OffsetManager.getOffset(groupId,topic)
-
-      val startInputDstream: InputDStream[ConsumerRecord[String, String]] = MyKafkaUtil.getKafkaStream(topic,ssc,startOffset,groupId)
+    var startInputDstream: InputDStream[ConsumerRecord[String, String]]=null
+    // 判断如果从redis中读取当前最新偏移量 则用该偏移量加载kafka中的数据  否则直接用kafka读出默认最新的数据
+    if(startOffset!=null&&startOffset.size>0){
+        startInputDstream = MyKafkaUtil.getKafkaStream(topic,ssc,startOffset,groupId)
       //startInputDstream.map(_.value).print(1000)
+    }else{
+        startInputDstream  = MyKafkaUtil.getKafkaStream(topic,ssc,groupId)
+    }
+
+    //获得本批次偏移量的移动后的新位置
+    var startupOffsetRanges: Array[OffsetRange] =null
+    val startupInputGetOffsetDstream: DStream[ConsumerRecord[String, String]] = startInputDstream.transform { rdd =>
+      startupOffsetRanges = rdd.asInstanceOf[HasOffsetRanges].offsetRanges
+      rdd
+    }
 
 
 
-    val startJsonObjDstream: DStream[JSONObject] = startInputDstream.map { record =>
+
+    val startJsonObjDstream: DStream[JSONObject] = startupInputGetOffsetDstream.map { record =>
       val jsonString: String = record.value()
       val jSONObject: JSONObject = JSON.parseObject(jsonString)
       jSONObject
@@ -70,7 +87,7 @@ object DauApp {
       println("过滤后："+jsonObjFilteredList.size)
       jsonObjFilteredList.toIterator
     }
-    // startJsonObjWithDauDstream.print(1000)
+     //startJsonObjWithDauDstream.print(1000)
 
 
     // 变换结构
@@ -92,14 +109,23 @@ object DauApp {
       )
 
     }
+    //dauInfoDstream println
     //要插入gmall1122_dau_info_2020xxxxxx  索引中
     dauInfoDstream.foreachRDD {rdd=>
+
        rdd.foreachPartition { dauInfoItr =>
+         //观察偏移量移动
+         val offsetRange: OffsetRange = startupOffsetRanges(TaskContext.getPartitionId())
+         println("偏移量:"+offsetRange.fromOffset+"-->"+offsetRange.untilOffset)
+         //写入es
          val dataList: List[(String, DauInfo)] = dauInfoItr.toList.map { dauInfo => (dauInfo.mid, dauInfo) }
          val dt = new SimpleDateFormat("yyyyMMdd").format(new Date())
          val indexName = "gmall1122_dau_info_" + dt
          MyEsUtil.saveBulk(dataList, indexName)
        }
+
+      // 偏移量的提交
+      OffsetManager.saveOffset(groupId,topic,startupOffsetRanges)
     }
        ssc.start()
        ssc.awaitTermination()
