@@ -24,7 +24,7 @@ object DauApp {
   // 2   redis的Key的日期（ 发送日志的业务） 和 es存储的索引后缀日期（当前系统日期） 没有对应 取同一天
   def main(args: Array[String]): Unit = {
       val sparkConf: SparkConf = new SparkConf().setAppName("dau_app").setMaster("local[*]")
-      val ssc = new StreamingContext(sparkConf,Seconds(5))
+      val ssc = new StreamingContext(sparkConf,Seconds(1))
       val topic="GMALL_START"
       val groupId="GMALL_DAU_CONSUMER"
      //从redis中读取当前最新偏移量

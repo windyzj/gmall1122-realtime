@@ -41,6 +41,7 @@ object MyEsUtil {
         val index: Index = new Index.Builder(data).id(id).build()
         bulkBuilder.addAction(index)
       }
+
       val bulk: Bulk = bulkBuilder.build()
       val items: util.List[BulkResult#BulkResultItem] = jest.execute(bulk).getItems
       println("已保存："+items.size()+"条数据！")
