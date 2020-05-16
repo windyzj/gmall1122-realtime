@@ -78,6 +78,8 @@ object DauApp {
         val dauKey = "dau:" + dateStr
         val mid: String = jsonObj.getJSONObject("common").getString("mid")
         val isFirstFlag: lang.Long = jedis.sadd(dauKey, mid)
+        jedis.expire(dauKey,3600*24*7)
+
         if(isFirstFlag==1L){
           jsonObjFilteredList+=jsonObj
         }

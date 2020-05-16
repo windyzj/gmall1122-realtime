@@ -38,7 +38,7 @@ object OffsetManager {
              if(offsetRange.fromOffset<offsetRange.untilOffset){
                   needSaveFlag=true
               }
-            println( "分区:"+offsetRange.partition+"   from "+offsetRange.fromOffset+"->"+offsetRange.untilOffset)
+            //println( "分区:"+offsetRange.partition+"   from "+offsetRange.fromOffset+"->"+offsetRange.untilOffset)
             offsetMap.put(offsetRange.partition.toString,offsetRange.untilOffset.toString)
           }
 
