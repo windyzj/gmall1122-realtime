@@ -49,10 +49,12 @@ object BaseDBMaxwellApp {
 
         for (jsonObj <- jsonObjItr ) {
           val dataObj: JSONObject = jsonObj.getJSONObject("data")
-          val tableName=jsonObj.getString("table")
-          val id =dataObj.getString("id")
-          val topic = "ODS_T_"+tableName.toUpperCase
-          MyKafkaSink.send(topic,id,dataObj.toJSONString)
+          val tableName = jsonObj.getString("table")
+          val id = dataObj.getString("id")
+          val topic = "ODS_T_" + tableName.toUpperCase
+          if (tableName=="order_info"&&jsonObj.getString("type").equals("insert")){
+            MyKafkaSink.send(topic, id, dataObj.toJSONString)
+          }
         }
       }
       OffsetManager.saveOffset(groupId,topic,offsetRanges)

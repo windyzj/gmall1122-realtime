@@ -63,21 +63,24 @@ object OrderInfoApp {
 
     val orderInfoWithfirstDstream: DStream[OrderInfo] = orderInfoDstream.mapPartitions { orderInfoItr =>
       val orderInfoList: List[OrderInfo] = orderInfoItr.toList
-      val userIdList: List[String] = orderInfoList.map(_.user_id.toString)
-      var sql = "select user_id,if_consumed from user_state1122 where user_id in (" + userIdList.mkString(",") + ")"
-      val userStateList: List[JSONObject] = PhoenixUtil.queryList(sql)
+      if(orderInfoList.size>0){
+          val userIdList: List[String] = orderInfoList.map(_.user_id.toString)
+          var sql = "select user_id,if_consumed from user_state1122 where user_id in ('" + userIdList.mkString("','") + "')"
+          val userStateList: List[JSONObject] = PhoenixUtil.queryList(sql)
 
-      //避免2重循环  把一个 list转为map
-      val userStateMap: Map[String, String] = userStateList.map(userStateJsonObj =>
-        (userStateJsonObj.getString("user_id"), userStateJsonObj.getString("if_consumed"))
-      ).toMap
-      for (orderInfo <- orderInfoList) {
-        val userIfConsumed: String = userStateMap.getOrElse(orderInfo.user_id.toString, null)
-        if (userIfConsumed != null && userIfConsumed == "1") {
-          orderInfo.if_first_order = "0"
-        } else {
-          orderInfo.if_first_order = "1"
-        }
+          //避免2重循环  把一个 list转为map
+          val userStateMap: Map[String, String] = userStateList.map(userStateJsonObj =>
+            //注意返回字段的大小写！！！！！！！！
+            (userStateJsonObj.getString("USER_ID"), userStateJsonObj.getString("IF_CONSUMED"))
+          ).toMap
+          for (orderInfo <- orderInfoList) {
+            val userIfConsumed: String = userStateMap.getOrElse(orderInfo.user_id.toString, null)
+            if (userIfConsumed != null && userIfConsumed == "1") {
+              orderInfo.if_first_order = "0"
+            } else {
+              orderInfo.if_first_order = "1"
+            }
+          }
       }
       orderInfoList.toIterator
     }
@@ -100,6 +103,9 @@ object OrderInfoApp {
 
     }
 
+    orderInfoFinalFirstDstream.cache()
+
+    orderInfoFinalFirstDstream.print(1000)
 
     orderInfoFinalFirstDstream.foreachRDD{rdd=>
           val userStatRDD:RDD[UserState]  = rdd.filter(_.if_first_order=="1").map(orderInfo=>
@@ -110,6 +116,9 @@ object OrderInfoApp {
            Seq("USER_ID","IF_CONSUMED"),
            new Configuration,
            Some("hadoop1,hadoop2,hadoop3:2181"))
+
+
+      OffsetManager.saveOffset(groupId, topic, offsetRanges)
 
     }
 
