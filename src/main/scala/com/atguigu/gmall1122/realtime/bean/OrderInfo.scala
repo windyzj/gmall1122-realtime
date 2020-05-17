@@ -19,8 +19,8 @@ case class OrderInfo(
                       var province_name:String,
                       var province_area_code:String,
 
-                      var user_age_group:String,
-                      var user_gender:String
+                       var user_age_group:String,  // 20及以下  21-30岁 30以上
+                       var user_gender:String    //男 女
 
                     )
 

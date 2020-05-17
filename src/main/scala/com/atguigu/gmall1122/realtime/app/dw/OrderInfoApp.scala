@@ -1,14 +1,16 @@
 package com.atguigu.gmall1122.realtime.app.dw
 
 import java.text.SimpleDateFormat
+import java.util.Date
 
 import com.alibaba.fastjson.{JSON, JSONObject}
 import com.atguigu.gmall1122.realtime.bean.{OrderInfo, UserState}
-import com.atguigu.gmall1122.realtime.util.{MyKafkaSink, MyKafkaUtil, OffsetManager, PhoenixUtil}
+import com.atguigu.gmall1122.realtime.util.{MyEsUtil, MyKafkaSink, MyKafkaUtil, OffsetManager, PhoenixUtil}
 import org.apache.hadoop.conf.Configuration
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.apache.spark.SparkConf
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
@@ -103,20 +105,88 @@ object OrderInfoApp {
 
     }
 
-    orderInfoFinalFirstDstream.cache()
+//    orderInfoFinalFirstDstream.mapPartitions{
+//      //每个分区查一次  12次  100次
+//
+//    }
 
-    orderInfoFinalFirstDstream.print(1000)
+    //查询次数过多
+//    orderInfoFinalFirstDstream.map{orderInfo=>
+//
+//
+//      val sql="select id ,name , region_id ,area_code  from gmall1122_base_province where id= '"+orderInfo.province_id+"'"
+//      val provinceJsonObjList: List[JSONObject] = PhoenixUtil.queryList(sql)
+//      if(provinceJsonObjList!=null&&provinceJsonObjList.size>0){
+//        orderInfo.province_name= provinceJsonObjList(0).getString("NAME")
+//        orderInfo.province_area_code= provinceJsonObjList(0).getString("AREA_CODE")
+//      }
+//      orderInfo
+//
+//    }
+// 考虑到查询的整表数据量很小  可以通过一次查询 再通过广播变量进行分发
+//问题：如果数据发生变动 无法感知 因为 算子外面的driver操作 只有启动时会执行一次 之后再不执行了
+ /*   val sql="select id ,name , region_id ,area_code  from gmall1122_base_province  "   //driver 只执行一次 启动
+    val provinceJsonObjList: List[JSONObject] = PhoenixUtil.queryList(sql)
+    val provinceListBc: Broadcast[List[JSONObject]] = ssc.sparkContext.broadcast(provinceJsonObjList)
+    orderInfoFinalFirstDstream.map{orderInfo:OrderInfo=>
+          val provinceJsonObjListFromBC: List[JSONObject] = provinceListBc.value   //executor
+          //list转map
+          val provinceJsonObjMap: Map[Long, JSONObject] = provinceJsonObjListFromBC.map(jsonObj=>(jsonObj.getLongValue("ID"),jsonObj)).toMap
+           val provinceJsonObj: JSONObject = provinceJsonObjMap.getOrElse(orderInfo.province_id,null)//从map中寻值
+          if(provinceJsonObj!=null){
+            orderInfo.province_name=provinceJsonObj.getString("NAME")
+            orderInfo.province_area_code=provinceJsonObj.getString("AREA_CODE")
+          }
+         orderInfo
+    }*/
 
-    orderInfoFinalFirstDstream.foreachRDD{rdd=>
-          val userStatRDD:RDD[UserState]  = rdd.filter(_.if_first_order=="1").map(orderInfo=>
-            UserState(orderInfo.user_id.toString,orderInfo.if_first_order)
-          )
-         import org.apache.phoenix.spark._
-         userStatRDD.saveToPhoenix("user_state1122",
-           Seq("USER_ID","IF_CONSUMED"),
-           new Configuration,
-           Some("hadoop1,hadoop2,hadoop3:2181"))
+    val orderWithProvinceDstream: DStream[OrderInfo] = orderInfoFinalFirstDstream.transform { rdd =>
+      //driver
+     val sql = "select id ,name , region_id ,area_code  from gmall1122_base_province  " //driver  周期性执行
+    val provinceJsonObjList: List[JSONObject] = PhoenixUtil.queryList(sql)
+      //list转map
+      val provinceJsonObjMap: Map[Long, JSONObject] = provinceJsonObjList.map(jsonObj => (jsonObj.getLongValue("ID"), jsonObj)).toMap
+      //广播这个map
+      val provinceJsonObjMapBc: Broadcast[Map[Long, JSONObject]] = ssc.sparkContext.broadcast(provinceJsonObjMap)
+      val orderInfoWithProvinceRDD: RDD[OrderInfo] = rdd.mapPartitions { orderInfoItr => //ex
+        val provinceJsonObjMap: Map[Long, JSONObject] = provinceJsonObjMapBc.value //接收bc
+      val orderInfoList: List[OrderInfo] = orderInfoItr.toList
+        for (orderInfo <- orderInfoList) {
+          val provinceJsonObj: JSONObject = provinceJsonObjMap.getOrElse(orderInfo.province_id, null) //从map中寻值
+          if (provinceJsonObj != null) {
+            orderInfo.province_name = provinceJsonObj.getString("NAME")
+            orderInfo.province_area_code = provinceJsonObj.getString("AREA_CODE")
+          }
+        }
+        orderInfoList.toIterator
+      }
+      orderInfoWithProvinceRDD
 
+    }
+    orderWithProvinceDstream.cache()
+
+    orderWithProvinceDstream.print(1000)
+
+    orderWithProvinceDstream.foreachRDD { rdd =>
+      //写入用户状态
+      val userStatRDD: RDD[UserState] = rdd.filter(_.if_first_order == "1").map(orderInfo =>
+        UserState(orderInfo.user_id.toString, orderInfo.if_first_order)
+      )
+      import org.apache.phoenix.spark._
+      userStatRDD.saveToPhoenix("user_state1122",
+        Seq("USER_ID", "IF_CONSUMED"),
+        new Configuration,
+        Some("hadoop1,hadoop2,hadoop3:2181"))
+    }
+         //写入es
+    //   println("订单数："+ rdd.count())
+      orderWithProvinceDstream.foreachRDD{rdd=>
+        rdd.foreachPartition{orderInfoItr=>
+          val orderList: List[OrderInfo] = orderInfoItr.toList
+          val orderWithKeyList: List[(String, OrderInfo)] = orderList.map(orderInfo=>(orderInfo.id.toString,orderInfo))
+          val dateStr: String = new SimpleDateFormat("yyyyMMdd").format(new Date)
+          MyEsUtil.saveBulk(orderWithKeyList,"gmall1122_order_info-"+dateStr)
+        }
 
       OffsetManager.saveOffset(groupId, topic, offsetRanges)
 
