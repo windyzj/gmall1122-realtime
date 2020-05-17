@@ -45,16 +45,21 @@ object BaseDBMaxwellApp {
     }
     
     dbJsonObjDstream.foreachRDD{rdd=>
-      rdd.foreachPartition{jsonObjItr=>
+      rdd.foreachPartition { jsonObjItr =>
 
-        for (jsonObj <- jsonObjItr ) {
+        for (jsonObj <- jsonObjItr) {
           val dataObj: JSONObject = jsonObj.getJSONObject("data")
           val tableName = jsonObj.getString("table")
           val id = dataObj.getString("id")
           val topic = "ODS_T_" + tableName.toUpperCase
-          if (tableName=="order_info"&&jsonObj.getString("type").equals("insert")){
-            MyKafkaSink.send(topic, id, dataObj.toJSONString)
-          }
+          if (dataObj != null && !dataObj.isEmpty)
+            if ((tableName == "order_info" && jsonObj.getString("type").equals("insert"))
+              || (tableName == "base_province")
+            ) {
+              MyKafkaSink.send(topic, id, dataObj.toJSONString)
+            }
+
+
         }
       }
       OffsetManager.saveOffset(groupId,topic,offsetRanges)

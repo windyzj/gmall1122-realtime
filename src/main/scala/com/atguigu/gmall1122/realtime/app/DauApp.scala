@@ -28,7 +28,7 @@ object DauApp {
       val topic="GMALL_START"
       val groupId="GMALL_DAU_CONSUMER"
      //从redis中读取当前最新偏移量
-    val startOffset: Map[TopicPartition, Long] = OffsetManager.getOffset(groupId,topic)
+    val startOffset: Map[TopicPartition, Long] = OffsetManager.getOffset(groupId,topic) //d  启动执行一次
 
     var startInputDstream: InputDStream[ConsumerRecord[String, String]]=null
     // 判断如果从redis中读取当前最新偏移量 则用该偏移量加载kafka中的数据  否则直接用kafka读出默认最新的数据
@@ -42,9 +42,12 @@ object DauApp {
     //获得本批次偏移量的移动后的新位置
     var startupOffsetRanges: Array[OffsetRange] =null
     val startupInputGetOffsetDstream: DStream[ConsumerRecord[String, String]] = startInputDstream.transform { rdd =>
-      startupOffsetRanges = rdd.asInstanceOf[HasOffsetRanges].offsetRanges
+      //rdd.map(  // ex ).var
+      startupOffsetRanges = rdd.asInstanceOf[HasOffsetRanges].offsetRanges //d
       rdd
     }
+
+
 
 
 
@@ -114,8 +117,9 @@ object DauApp {
     //dauInfoDstream println
     //要插入gmall1122_dau_info_2020xxxxxx  索引中
     dauInfoDstream.foreachRDD {rdd=>
-
-       rdd.foreachPartition { dauInfoItr =>
+        val infoes: Array[DauInfo] = rdd.collect()
+      infoes.splitAt(8)//.....d
+       rdd.foreachPartition { dauInfoItr =>  //ex
          //观察偏移量移动
          val offsetRange: OffsetRange = startupOffsetRanges(TaskContext.getPartitionId())
          println("偏移量:"+offsetRange.fromOffset+"-->"+offsetRange.untilOffset)
@@ -127,8 +131,9 @@ object DauApp {
        }
 
       // 偏移量的提交
-      OffsetManager.saveOffset(groupId,topic,startupOffsetRanges)
+      OffsetManager.saveOffset(groupId,topic,startupOffsetRanges)//  d   周期性执行
     }
+
        ssc.start()
        ssc.awaitTermination()
 
