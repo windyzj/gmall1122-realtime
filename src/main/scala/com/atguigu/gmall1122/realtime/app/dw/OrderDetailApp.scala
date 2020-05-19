@@ -88,7 +88,7 @@ object OrderDetailApp {
 
     orderDetailWithSkuDstream.print(1000)
 
-    orderDetailWithSkuDstream.map(orderDetail=>(orderDetail.id,orderDetail)).j
+
 
          //写入es
     //   println("订单数："+ rdd.count())
@@ -96,7 +96,7 @@ object OrderDetailApp {
         rdd.foreachPartition{orderDetailItr=>
           val orderDetailList: List[OrderDetail] = orderDetailItr.toList
           for (orderDetail <- orderDetailList ) {
-            MyKafkaSink.send("DW_ORDER_DETAIL",orderDetail.id.toString,JSON.toJSONString(orderDetail,new SerializeConfig(true)))
+            MyKafkaSink.send("DW_ORDER_DETAIL",orderDetail.order_id.toString,JSON.toJSONString(orderDetail,new SerializeConfig(true)))
           }
         }
 

@@ -15,10 +15,12 @@ case class OrderDetailWide(
                        var sku_num: Long=0L,
                        var sku_name: String=null,
                        var benefit_reduce_amount:Double =0D ,
-                       var original_total_amount:Double =0D ,
+                       var original_total_amount:Double =0D ,// 订单主表中的 原始交易额 = 所有明细 单价*数量的汇总值
                        var feight_fee:Double=0D,
-                       var final_total_amount: Double =0D ,
-                       var final_detail_amount:Double=0D,
+                       var final_total_amount: Double =0D,   //订单主表中的 实际付款总额
+                       var final_detail_amount:Double=0D,    //从表中的  实际分摊总额
+
+
 
                        var if_first_order:String=null,
 

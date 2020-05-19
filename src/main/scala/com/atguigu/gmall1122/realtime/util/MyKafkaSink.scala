@@ -13,6 +13,7 @@ object MyKafkaSink {
   def createKafkaProducer: KafkaProducer[String, String] = {
     val properties = new Properties
     properties.put("bootstrap.servers", broker_list)
+    properties.put("max.poll.records", "1000000");
     properties.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer")
     properties.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer")
     properties.put("enable.idompotence",(true: java.lang.Boolean))
