@@ -3,6 +3,7 @@ package com.atguigu.gmall1122.realtime.app.dw
 import java.text.SimpleDateFormat
 import java.util.Date
 
+import com.alibaba.fastjson.serializer.SerializeConfig
 import com.alibaba.fastjson.{JSON, JSONObject}
 import com.atguigu.gmall1122.realtime.bean.{OrderInfo, UserState}
 import com.atguigu.gmall1122.realtime.util.{MyEsUtil, MyKafkaSink, MyKafkaUtil, OffsetManager, PhoenixUtil}
@@ -141,28 +142,54 @@ object OrderInfoApp {
     }*/
 
     val orderWithProvinceDstream: DStream[OrderInfo] = orderInfoFinalFirstDstream.transform { rdd =>
-      //driver
-     val sql = "select id ,name , region_id ,area_code  from gmall1122_base_province  " //driver  周期性执行
-    val provinceJsonObjList: List[JSONObject] = PhoenixUtil.queryList(sql)
-      //list转map
-      val provinceJsonObjMap: Map[Long, JSONObject] = provinceJsonObjList.map(jsonObj => (jsonObj.getLongValue("ID"), jsonObj)).toMap
-      //广播这个map
-      val provinceJsonObjMapBc: Broadcast[Map[Long, JSONObject]] = ssc.sparkContext.broadcast(provinceJsonObjMap)
-      val orderInfoWithProvinceRDD: RDD[OrderInfo] = rdd.mapPartitions { orderInfoItr => //ex
+
+      if(rdd.count()>0){
+        //driver
+        val sql = "select id ,name , region_id ,area_code  from gmall1122_base_province  " //driver  周期性执行
+        val provinceJsonObjList: List[JSONObject] = PhoenixUtil.queryList(sql)
+
+        //list转map
+        val provinceJsonObjMap: Map[Long, JSONObject] = provinceJsonObjList.map(jsonObj => (jsonObj.getLongValue("ID"), jsonObj)).toMap
+        //广播这个map
+        val provinceJsonObjMapBc: Broadcast[Map[Long, JSONObject]] = ssc.sparkContext.broadcast(provinceJsonObjMap)
+        val orderInfoWithProvinceRDD: RDD[OrderInfo] = rdd.mapPartitions { orderInfoItr => //ex
         val provinceJsonObjMap: Map[Long, JSONObject] = provinceJsonObjMapBc.value //接收bc
-      val orderInfoList: List[OrderInfo] = orderInfoItr.toList
-        for (orderInfo <- orderInfoList) {
-          val provinceJsonObj: JSONObject = provinceJsonObjMap.getOrElse(orderInfo.province_id, null) //从map中寻值
-          if (provinceJsonObj != null) {
-            orderInfo.province_name = provinceJsonObj.getString("NAME")
-            orderInfo.province_area_code = provinceJsonObj.getString("AREA_CODE")
+        val orderInfoList: List[OrderInfo] = orderInfoItr.toList
+          for (orderInfo <- orderInfoList) {
+            val provinceJsonObj: JSONObject = provinceJsonObjMap.getOrElse(orderInfo.province_id, null) //从map中寻值
+            if (provinceJsonObj != null) {
+              orderInfo.province_name = provinceJsonObj.getString("NAME")
+              orderInfo.province_area_code = provinceJsonObj.getString("AREA_CODE")
+            }
           }
+          orderInfoList.toIterator
         }
-        orderInfoList.toIterator
+        orderInfoWithProvinceRDD
+      }else{
+        rdd
       }
-      orderInfoWithProvinceRDD
 
     }
+
+    /////////////// 合并 用户信息////////////////////
+    val orderInfoWithUserDstream: DStream[OrderInfo] = orderWithProvinceDstream.mapPartitions { orderInfoItr =>
+      val orderList: List[OrderInfo] = orderInfoItr.toList
+      if(orderList.size>0) {
+        val userIdList: List[Long] = orderList.map(_.user_id)
+        val sql = "select id ,user_level ,  birthday  , gender  , age_group  , gender_name from gmall1122_user_info where id in ('" + userIdList.mkString("','") + "')"
+        val userJsonObjList: List[JSONObject] = PhoenixUtil.queryList(sql)
+        val userJsonObjMap: Map[Long, JSONObject] = userJsonObjList.map(userJsonObj => (userJsonObj.getLongValue("ID"), userJsonObj)).toMap
+        for (orderInfo <- orderList) {
+          val userJsonObj: JSONObject = userJsonObjMap.getOrElse(orderInfo.user_id, null)
+          orderInfo.user_age_group = userJsonObj.getString("AGE_GROUP")
+          orderInfo.user_gender = userJsonObj.getString("GENDER_NAME")
+        }
+      }
+      orderList.toIterator
+    }
+
+
+
     orderWithProvinceDstream.cache()
 
     orderWithProvinceDstream.print(1000)
@@ -180,12 +207,18 @@ object OrderInfoApp {
     }
          //写入es
     //   println("订单数："+ rdd.count())
-      orderWithProvinceDstream.foreachRDD{rdd=>
+    orderWithProvinceDstream.foreachRDD{rdd=>
         rdd.foreachPartition{orderInfoItr=>
           val orderList: List[OrderInfo] = orderInfoItr.toList
           val orderWithKeyList: List[(String, OrderInfo)] = orderList.map(orderInfo=>(orderInfo.id.toString,orderInfo))
           val dateStr: String = new SimpleDateFormat("yyyyMMdd").format(new Date)
-          MyEsUtil.saveBulk(orderWithKeyList,"gmall1122_order_info-"+dateStr)
+        //  MyEsUtil.saveBulk(orderWithKeyList,"gmall1122_order_info-"+dateStr)
+
+          for (orderInfo <- orderList ) {
+            println(orderInfo)
+            MyKafkaSink.send("DW_ORDER_INFO",orderInfo.id.toString,JSON.toJSONString(orderInfo,new SerializeConfig(true)))
+          }
+
         }
 
       OffsetManager.saveOffset(groupId, topic, offsetRanges)
@@ -195,20 +228,7 @@ object OrderInfoApp {
 
 
 
-   /* dbJsonObjDstream.foreachRDD { rdd =>
-      rdd.foreachPartition { jsonObjItr =>
 
-        for (jsonObj <- jsonObjItr) {
-          val dataObj: JSONObject = jsonObj.getJSONObject("data")
-          val tableName = jsonObj.getString("table")
-          val id = dataObj.getString("id")
-          val topic = "ODS_T_" + tableName.toUpperCase
-          MyKafkaSink.send(topic, id, dataObj.toJSONString)
-        }
-      }
-      OffsetManager.saveOffset(groupId, topic, offsetRanges)
-
-    }*/
     ssc.start()
     ssc.awaitTermination()
 

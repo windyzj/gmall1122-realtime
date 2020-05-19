@@ -52,9 +52,15 @@ object BaseDBMaxwellApp {
           val tableName = jsonObj.getString("table")
           val id = dataObj.getString("id")
           val topic = "ODS_T_" + tableName.toUpperCase
-          if (dataObj != null && !dataObj.isEmpty)
+          if (dataObj != null && !dataObj.isEmpty && !jsonObj.getString("type").equals("delete"))
             if ((tableName == "order_info" && jsonObj.getString("type").equals("insert"))
               || (tableName == "base_province")
+              ||(tableName == "user_info")
+              ||(tableName == "spu_info")
+              ||(tableName == "sku_info")
+              ||(tableName == "base_category3")
+              ||(tableName == "base_trademark")
+              ||((tableName == "order_detail") )
             ) {
               MyKafkaSink.send(topic, id, dataObj.toJSONString)
             }

@@ -1,28 +1,26 @@
 package com.atguigu.gmall1122.realtime.app.dim
 
+
 import com.alibaba.fastjson.JSON
-import com.atguigu.gmall1122.realtime.bean.dim.BaseProvince
+import com.atguigu.gmall1122.realtime.bean.dim.{BaseCategory3, UserInfo}
 import com.atguigu.gmall1122.realtime.util.{MyKafkaUtil, OffsetManager}
 import org.apache.hadoop.conf.Configuration
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.apache.spark.SparkConf
-import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
 import org.apache.spark.streaming.kafka010.{HasOffsetRanges, OffsetRange}
+import org.apache.spark.streaming.{Seconds, StreamingContext}
 
-/**
-  * 把kafka中的数据写入到hbase
-  */
-object BaseProvinceApp {
+object BaseCategory3App {
 
   def main(args: Array[String]): Unit = {
 
-    val sparkConf: SparkConf = new SparkConf().setMaster("local[*]").setAppName("dim_base_province_app")
+    val sparkConf: SparkConf = new SparkConf().setMaster("local[*]").setAppName("dim_base_category3_app")
 
     val ssc = new StreamingContext(sparkConf, Seconds(5))
-    val topic = "ODS_T_BASE_PROVINCE";
-    val groupId = "base_province_group"
+    val topic = "ODS_T_BASE_CATEGORY3";
+    val groupId = "base_category3_group"
 
 
     /////////////////////  偏移量处理///////////////////////////
@@ -43,15 +41,15 @@ object BaseProvinceApp {
       rdd
     }
 
-    val baseProvinceDstream: DStream[BaseProvince] = inputGetOffsetDstream.map { record =>
-      val provinceJsonStr: String = record.value()
-      val baseProvince: BaseProvince = JSON.parseObject(provinceJsonStr, classOf[BaseProvince])
-      baseProvince
+    val objectDstream: DStream[BaseCategory3] = inputGetOffsetDstream.map { record =>
+      val jsonStr: String = record.value()
+      val obj: BaseCategory3 = JSON.parseObject(jsonStr, classOf[BaseCategory3])
+      obj
     }
 
-    baseProvinceDstream.foreachRDD{rdd=>
+    objectDstream.foreachRDD{rdd=>
       import org.apache.phoenix.spark._
-      rdd.saveToPhoenix("GMALL1122_BASE_PROVINCE",Seq("ID", "NAME", "REGION_ID", "AREA_CODE")
+      rdd.saveToPhoenix("GMALL1122_BASE_CATEGORY3",Seq("ID", "NAME", "CATEGORY2_ID" )
         ,new Configuration,Some("hadoop1,hadoop2,hadoop3:2181"))
 
       OffsetManager.saveOffset(groupId, topic, offsetRanges)
