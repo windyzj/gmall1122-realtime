@@ -62,9 +62,9 @@ object BaseDBMaxwellApp {
               ||(tableName == "base_trademark")
               ||((tableName == "order_detail") )
             ) {
-              if(tableName == "order_info"|| tableName == "order_detail" ){
-                  Thread.sleep(300)
-              }
+//              if(tableName == "order_info"|| tableName == "order_detail" ){
+//                  Thread.sleep(300)
+//              }
               MyKafkaSink.send(topic, id, dataObj.toJSONString)
             }
 

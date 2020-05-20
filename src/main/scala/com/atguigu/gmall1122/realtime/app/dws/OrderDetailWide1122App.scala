@@ -1,11 +1,12 @@
 package com.atguigu.gmall1122.realtime.app.dws
 
-import java.lang
+import java.{lang, util}
 
-import com.alibaba.fastjson.JSON
+import com.alibaba.fastjson.serializer.SerializeConfig
+import com.alibaba.fastjson.{JSON, JSONObject}
 import com.atguigu.gmall1122.realtime.bean.{OrderDetail, OrderDetailWide, OrderInfo}
 import com.atguigu.gmall1122.realtime.bean.dim.SkuInfo
-import com.atguigu.gmall1122.realtime.util.{MyKafkaUtil, OffsetManager, RedisUtil}
+import com.atguigu.gmall1122.realtime.util.{MyKafkaSink, MyKafkaUtil, OffsetManager, RedisUtil}
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.apache.spark.SparkConf
@@ -31,8 +32,7 @@ object OrderDetailWide1122App {
     /////////////////////  偏移量处理///////////////////////////
     var offsetOrderInfo: Map[TopicPartition, Long] = OffsetManager.getOffset(groupId, topicOrderInfo)
     var offsetOrderDetail: Map[TopicPartition, Long] = OffsetManager.getOffset(groupId, topicOrderDetail)
-    offsetOrderInfo=null
-    offsetOrderDetail=null
+
     var inputOrderInfoDstream: InputDStream[ConsumerRecord[String, String]] = null
     var inputOrderDetailDstream: InputDStream[ConsumerRecord[String, String]] = null
     // 判断如果从redis中读取当前最新偏移量 则用该偏移量加载kafka中的数据  否则直接用kafka读出默认最新的数据
@@ -107,54 +107,69 @@ object OrderDetailWide1122App {
     //             sku_price 商品单价  sku_num 商品购买个数
     // 目标 ： final_detail_amount  明细分摊实付金额       明细分摊实付金额 / 实付总金额 = (单价* 个数)/ 应付总金额
                //但是还要考虑    必须保证 sum(明细分摊实付金额) = 实付总金额
-
-    orderDetailWideFilteredDstream.mapPartitions { orderWideItr =>
+//    orderDetailWideFilteredDstream.mapPartitions{orderWideItr=>
+//      orderWideItr.toList
+//      null
+//    }
+    val orderDetailWideWithSplitDsteam: DStream[OrderDetailWide] = orderDetailWideFilteredDstream.mapPartitions { orderWideItr =>
       // jedis
-      // 首先 从 redis中取得该笔名的已经存入（计算）的兄弟明细数据
-      //  把兄弟明细的应收金额+自己的应收金额 得到一个汇总值
-      //   把兄弟明细中的实收分摊汇总值 求出
+      val jedis: Jedis = RedisUtil.getJedisClient
+      val orderDetailWideList: List[OrderDetailWide] = orderWideItr.toList
+      for (orderWide <- orderDetailWideList) {
+        // 首先 从 redis中取得该笔名的已经存入（计算）的兄弟明细数据
+        // redis    type  ?  list     key ?   order_wide:split:[order_id]   value ? json{ sku_price:xxx ,sku_num:xxx,final_detail_amount:xxx}   expire  600
+        var orderWideSplitKey = "order_wide:split:" + orderWide.order_id
+        val orderWideSplitList: util.List[String] = jedis.lrange(orderWideSplitKey, 0, -1)
 
-      //比较  主订单的应收总值是否= 明细的应收汇总值
-      //如果不等于 （非最后一笔）
-      // 用乘除占比 求得 该明细分摊金额
-      //如果等于
-      // 用减法 总实付-兄弟明细的分摊汇总
+        var originAmountSum = 0D
+        var finalAmountSum = 0D
+        //  把兄弟明细的应收金额+自己的应收金额 得到一个汇总值
+        //   把兄弟明细中的实收分摊汇总值 求出
+        import scala.collection.JavaConversions._
+        if (orderWideSplitList != null && orderWideSplitList.size() > 0) {
+          for (splitJson <- orderWideSplitList) {
+            val splitJsonObj: JSONObject = JSON.parseObject(splitJson)
+            originAmountSum += splitJsonObj.getDouble("sku_price") * splitJsonObj.getDouble("sku_num")
+            finalAmountSum += splitJsonObj.getDouble("final_detail_amount")
+          }
+        }
+        //比较  主订单的应收总值是否= 明细的应收汇总值(含自己）
+        if (orderWide.original_total_amount == originAmountSum + orderWide.sku_price * orderWide.sku_num) {
+          //如果等于
+          // 用减法 总实付-兄弟明细的分摊汇总
+          orderWide.final_detail_amount = Math.round((orderWide.final_total_amount - finalAmountSum) * 100) / 100D
+        } else {
+          //如果不等于 （非最后一笔）
+          // 用乘除占比 求得 该明细分摊金额  公式： 明细分摊实付金额？ / 实付总金额 = (单价* 个数)/ 应付总金额
+          //明细分摊实付金额？= 实付总金额*(单价* 个数) / 应付总金额
+          orderWide.final_detail_amount = Math.round(orderWide.final_total_amount * (orderWide.sku_price * orderWide.sku_num) / orderWide.original_total_amount * 100) / 100D
+        }
 
-      //把当前明细的计算结果保存到redis 中
-      //保存到某个list里  返回list的迭代器
-      null
+        //把当前明细的计算结果保存到redis 中
+        val curObject = new JSONObject()
+        curObject.put("sku_num", orderWide.sku_num)
+        curObject.put("sku_price", orderWide.sku_price)
+        curObject.put("final_detail_amount", orderWide.final_detail_amount)
+        jedis.lpush(orderWideSplitKey, curObject.toJSONString)
+
+      }
+      jedis.close()
+      orderDetailWideList.toIterator
     }
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-      null
-    }
-
-
-
-
-
-
-
-    orderDetailWideFilteredDstream.print(1000)
-
-
+    orderDetailWideWithSplitDsteam.foreachRDD{rdd=>
+      rdd.foreachPartition { orderWideItr =>
+        for (orderWide <- orderWideItr) {
+              MyKafkaSink.send("DWS_ORDER_DETAIL_WIDE",  JSON.toJSONString(orderWide,new SerializeConfig(true)))
+          }
+        }
+      OffsetManager.saveOffset(groupId,topicOrderInfo,orderInfoOffsetRanges)
+      OffsetManager.saveOffset(groupId,topicOrderDetail,orderDetailOffsetRanges)
+      }
     ssc.start()
     ssc.awaitTermination()
-
-
-
   }
 
 }
