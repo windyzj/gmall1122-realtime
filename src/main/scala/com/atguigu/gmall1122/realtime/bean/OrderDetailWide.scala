@@ -20,10 +20,7 @@ case class OrderDetailWide(
                        var final_total_amount: Double =0D,   //订单主表中的 实际付款总额
                        var final_detail_amount:Double=0D,    //从表中的  实际分摊总额
 
-
-
                        var if_first_order:String=null,
-
                        var province_name:String=null,
                        var province_area_code:String=null,
 
